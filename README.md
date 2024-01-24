@@ -1,2 +1,2 @@
-# ENCODE_TE
-Various code for "Regulatory Transposable Elements in the Encyclopedia of DNA Elements"
+# ENCODE TE project (ENCOTE for short)
+Various code and files for "Regulatory Transposable Elements in the Encyclopedia of DNA Elements"
