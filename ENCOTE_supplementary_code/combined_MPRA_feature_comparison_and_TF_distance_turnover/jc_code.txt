@@ -1,0 +1,399 @@
+### Friday October 20th, 2023
+# Below includes all code required to generate figures (made by Jason Chobirko) in the paper "Regulatory Transposable Elements in the 
+# Encyclopedia of DNA Elements". All code was performed on a cloud-based Linux server with shared access to software, either on the command
+# line or in R. Versions of software used will be provided as needed in comments or as installation commands ran on our server. Figures included
+# in this code include: 4b, 4c, 4d, 5a, & 5c
+
+
+##### Software Versions
+# pigz					| v2.5 from https://zlib.net/pigz/
+# awk					| GNU Awk 5.1.0, API: 3.0 (GNU MPFR 4.0.2, GNU MP 6.2.0)
+# kentUtils				| 2017-11-17 on server, otherwise from https://github.com/ENCODE-DCC/kentUtils
+# R						| v4.1.3 on a Rocky9 server
+# Python				| Python 3.9.10 (main, Sep 23 2022, 00:00:00) [GCC 11.2.1 20220127 (Red Hat 11.2.1-9)] on linux
+# multiBigwigSummary	| 3.5.1 (deepTools 3.5.1)
+# liftOver				| https://hgdownload.cse.ucsc.edu/admin/exe/linux.x86_64/liftOver
+
+
+########################
+##### Download Data
+########################
+# All public data, either from the ENCODE database or elsewhere needs to be downloaded. Specifically, 535 ChIP-seq datasets in K562, primate 
+# phastCons scores in hg38 coordinates, lentivirus MPRA data in K562, 30 mouse TF ChIP-seq datasets in MEL, K562 ATAC-seq data, hg38 cCRE 
+# annotations, and TE annotations in both human (hg38) and mouse (mm10)
+
+
+### hg38 K562 TF ChIP-seq
+# Start by downloading a metadata file containing all the relevant TF ChIP assays in K562
+wget "https://www.encodeproject.org/metadata/?control_type%21=%2A&status=released&perturbed=false&assay_title=TF+ChIP-seq&biosample_ontology.term_name=K562&assembly=GRCh38&type=Experiment&files.analyses.status=released&files.preferred_default=true" -O h_metadata.txt
+
+# Create a list of commands to iterate through the above file and pull out the narrowPeak files with IDR in hg38 that have no major audit flags
+mkdir 0_beds
+> wget_h_cmds 
+awk -F'\t' '{gsub("-human","",$23); if ($2 == "bed narrowPeak" && $5 ~ "IDR" && $6 == "GRCh38" && $18 != "insertion" && length($58) + length($59) < 1) print "wget " $48 " -O 0_beds/" $23}' h_metadata.txt | awk -F' ' '{x[$4]++; print $0 "_" x[$4] ".bed.gz"}' > wget_h_cmds
+awk -F'\t' '{gsub("-human","",$23); if ($2 == "bed narrowPeak" && $5 ~ "IDR" && $6 == "GRCh38" && $18 == "insertion" && length($58) + length($59) < 1) print "wget " $48 " -O 0_beds/" $23}' h_metadata.txt | awk -F' ' '{x[$4]++; print $0 "_" x[$4] ".insert.bed.gz"}' >> wget_h_cmds
+
+# Run through each assay, wget the peaks, then move to a separate directory
+while read cmd; do $cmd; done < wget_h_cmds
+
+# gunzip all the files for downstream analyses
+for f in 0_beds/*.gz; do gunzip "$f"; done
+
+
+### mm10 MEL TF ChIP-seq
+# Start by downloading a metadata file containing all the relevant TF ChIP assays in MEL
+wget "https://www.encodeproject.org/metadata/?assay_title=TF+ChIP-seq&replicates.library.biosample.donor.organism.scientific_name=Mus+musculus&biosample_ontology.term_name=MEL&searchTerm=ChIP-seq&type=Experiment&files.analyses.status=released&files.preferred_default=true" -O m_metadata.txt
+
+# Create a list of commands to iterate through the above file and pull out the narrowPeak files with IDR thresholded peaks in mm10  
+mkdir 1_mouseTFs
+> wget_m_cmds
+awk -F'\t' '{gsub("-mouse","",$23); if ($2 == "bed narrowPeak" && $5 == "IDR thresholded peaks" && $6 == "mm10" && length($35) >= 4) print "wget " $48 " -O 1_mouseTFs/" $23}' m_metadata.txt | awk -F' ' '{x[$4]++; print $0 "_" x[$4] ".bed.gz"}' > wget_m_cmds
+
+# Run through each assay, wget the peaks, then move to a separate directory
+while read cmd; do $cmd; done < wget_m_cmds
+
+# gunzip all the files for downstream analysis
+for f in 1_mouseTFs/*.gz; do gunzip "$f"; done
+
+
+### hg38 K562 ATAC-seq
+# Download ATAC-seq data in K562 and take the summit coordinates
+wget https://www.encodeproject.org/files/ENCFF558BLC/@@download/ENCFF558BLC.bed.gz -O K562_atac.narrowPeak.gz 
+zcat K562_atac.narrowPeak.gz | awk '{OFS="\t"; $2 = $2 + $10; $3 = $2 + 1; print}' | sort -k1,1 -k2,2n | cut -f1-4 > K562_atac_summits.bed
+
+
+### hg38 17-way phastCons scores
+# Download the 17-way phastCons scores of human and 16 primates in hg38 coordinates. Large file!
+wget https://hgdownload.soe.ucsc.edu/goldenPath/hg38/phastCons17way/hg38.phastCons17way.bw 
+
+
+### hg38 TE Annotations
+# Download the hg38 TE annotations from RepeatMasker and use a custom script (controlMerge.v3.py) to merge nearby annotations
+wget http://www.repeatmasker.org/genomes/hg38/RepeatMasker-rm405-db20140131/hg38.fa.out.gz
+
+# Filter out all Simple_repeat, Low_complexity and Satellite annotations, as well as those on random/unknown contigs 
+zcat hg38.fa.out.gz | sed '1,3d' | awk '{OFS="\t"; if ($11 != "Simple_repeat" && $11 != "Low_complexity" && $11 != "Satellite") print}' | egrep -v '_alt|_random|chrUn' | pigz -p 4 -c > hg38.filt.fa.out.gz
+python controlMerge.v3.py <(zcat hg38.filt.fa.out.gz) tmp
+
+# Filter additional unwanted annotations and then subtract 1 from start to shift coordinate indexing 
+egrep -v 'rRNA|scRNA|snRNA|srpRNA' tmp | awk '{OFS="\t"; if ($5 != "tRNA" && $5 != "RNA") print}' | awk '{OFS="\t"; print $1, $2 - 1, $3, $4, $5, $6, $7, $8, $1 ":" $2 - 1 "-" $3 "|" $4}' | sort -k1,1 -k2,2n -S 5% --parallel=4 | pigz -c -p 4 > TE_hg38.txt.gz
+rm tmp hg38.fa.out.gz hg38.filt.fa.out.gz
+
+
+### mm10 TE Annotations
+# Download the mm10 TE annotations from RepeatMasker and use a custom script (controlMerge.v3.py) to merge nearby annotations
+wget http://www.repeatmasker.org/genomes/mm10/RepeatMasker-rm405-db20140131/mm10.fa.out.gz
+
+# Filter out all the Simple_repeat, Low_complexity and Satellite regions since they aren't interesting
+zcat mm10.fa.out.gz | sed '1,3d' | awk '{OFS="\t"; if (!($11 ~ /Simple_repeat/ || $11 ~ /Low_complexity/ || $11 ~ /Satellite/ || $11 ~ /Unknown/)) print}' | egrep -v '_alt|_random|chrUn' | pigz -p 16 -c > mm10.filt.fa.out.gz
+python /workdir/jdc397/0_scripts/controlMerge.v3.py <(zcat mm10.filt.fa.out.gz) tmp
+
+# Subtract 1 from start to shift coordinate indexing
+awk '{OFS="\t"; print $1, $2 - 1, $3, $4, $5, $6, $7, $8, $1 ":" $2 - 1 "-" $3 "|" $4}' tmp | sort -k1,1 -k2,2n --parallel=4 -S 5% | pigz -c -p 4 > TE_mm10.txt.gz
+rm tmp mm10.fa.out.gz mm10.filt.fa.out.gz
+
+
+### hg38 cCRE Annotations
+# Download the cCRE annotations for K562 from https://www.encodeproject.org/files/ENCFF286VQG/
+wget https://storage.googleapis.com/gcp.wenglab.org/Registry-V3/Seven-Group/ENCFF414OGC_ENCFF806YEZ_ENCFF849TDM_ENCFF736UDR.7group.bed -O k562_ccres.bed
+
+# Create a list of PLS cCREs in K562
+awk '{OFS="\t"; if ($10 ~ PLS) print $1, $2, $3}' k562_ccres.bed | sort -k1,1 -k2,2n > k562_pls.bed
+
+
+### hg38 lentivirus MPRA 
+# Download from ENCODE and parse the file so that each interval is only listed once rather than multiple times
+wget https://www.encodeproject.org/files/ENCFF616IAQ/@@download/ENCFF616IAQ.tsv
+wget https://www.encodeproject.org/files/ENCFF975XXG/@@download/ENCFF975XXG.bed.gz
+#K562 lentiMPRA data processing
+gunzip ENCFF975XXG.bed.gz
+python3 connect_coords_to_element_K562-244K.py ENCFF975XXG.bed ENCFF616IAQ.tsv lentiMPRA_K562-244K.bed > missing.txt
+sort -k 1,1 -k2,2n lentiMPRA_K562-244K.bed > lentiMPRA_K562-244K_sorted.bed
+#Normalize lentiMPRA fold change to shuffled controls
+grep "shuffled" ENCFF616IAQ.tsv > shuffled_elements.tsv
+python3 normalize_to_median_of_list.py lentiMPRA_K562-244K_sorted.bed shuffled_elements.tsv lentiMPRA_K562-244K_sorted_diNucShuffledNorm.bed
+#Add header to lentiMPRA file (score column is meaningless)
+cat lentiMPRA_header lentiMPRA_K562-244K_sorted_diNucShuffledNorm.bed > lentiMPRA_K562-244K_sorted_diNucShuffledNorm_wHeader.bed
+#Take mean of plus/minus strands if both are listed for the same coordinate
+paste <(head -n1 lentiMPRA_K562-244K_sorted_diNucShuffledNorm_wHeader.bed) <(printf '%s\t%s\t\n' "Min_log2FC" "Max_log2FC") > lentiMPRA_k562.bed
+sed '1d' lentiMPRA_K562-244K_sorted_diNucShuffledNorm_wHeader.bed | awk '{OFS="\t"; gsub("_.*", "", $4); print}' | groupBy -g 1-5 -c 7,7,7 -o mean,min,max | awk '{OFS="\t"; print $1, $2, $3, $4, $5, "+", $6, $7, $8}' | sort -k1,1 -k2,2n -S 10% >> lentiMPRA_k562.bed
+
+### hg38 <-> mm10 chains
+# Download the reciprocal-best chain files to use with liftOver
+wget http://hgdownload.cse.ucsc.edu/goldenPath/mm10/vsHg38/reciprocalBest/hg38.mm10.rbest.chain.gz
+wget http://hgdownload.cse.ucsc.edu/goldenPath/mm10/vsHg38/reciprocalBest/mm10.hg38.rbest.chain.gz
+
+
+### hg38 chrom.sizes 
+# Get the sizes of the hg38 chromosomes
+wget https://hgdownload.cse.ucsc.edu/goldenpath/hg38/bigZips/hg38.chrom.sizes
+
+
+### mm10 chrom.sizes 
+# Get the sizes of the mm10 chromosomes
+wget https://hgdownload.cse.ucsc.edu/goldenpath/mm10/bigZips/mm10.chrom.sizes
+
+
+########################
+##### Perform Analyses
+########################
+# Each analysis will be split based on which figure it is used for
+
+
+### Figure 4b 
+# This figure utilizes all the downloaded K562 data and TE annotations to find out whether TEs bound by a given factor are found closer
+# to another peak of that factor compared to TEs of the same annotation name (ie repName, or column 4 of the TE annotation files). To do this,
+# while taking into account the discrepancy between total numbers of bound vs unbound TEs, we used permuation to randomly select an equal number
+# of TEs from the unbound pool for each repName 1000 times. From this list, we calculated the median rank value 
+
+### Intersection for distance analysis
+# Generate all the input files to create the necessary analysis in figure 4b
+mkdir 3_distance
+> int_cmds
+for f in 0_beds/*.bed; do echo "awk '{OFS=\"\t\"; print \$1, \$2 + \$10, \$2 + \$10 + 1, \$2, \$3, \$1 \":\" \$2  + \$10 \"-\" \$2 + \$10 + 1}' $f | sort -k1,1 -k2,2n | bedtools intersect -wao -sorted -a stdin -b <(zcat TE_hg38.txt.gz) | awk '{OFS=\"\t\"; print \$1, \$4, \$5, \$2, \$3, \$6, \$7, \$8, \$9, \$10, \$11, \$12, \$13, \$14, \$15}' | sort -k1,1 -k2,2n > 3_distance"${f:6:-4}"_IDs" >> int_cmds; done
+
+# Make a family stats file that contains the number of elements of each family and their average divergence
+zcat TE_hg38.txt.gz | sort -k4,4 -k5,5 --parallel=4 -S 5% | groupBy -i stdin -g 4,5 -c 4,8 -o count,mean > h_famStats.txt
+
+# Run through each assay and intersect the peaks against TE annotations and count the number of TE families that meet the minimum of 10 bound TEs
+# NOTE: Will take quite a while. Use GNU parallel if you wish to speed up commands otherwise
+while read cmd; do $cmd; done < int_cmds
+
+# Run an R script, which will generate a pdf of the figure 4b panel and perform that analysis. Takes some time and uses at most 60 cores for 
+# parallelization with mclapply
+Rscript distPerm.r --vanilla 
+
+
+### Figure 5a
+# This figure uses the lentivirus MPRA data, cCRE annotations, and TE annotations to measure how different TEs are at driving enhancer activity
+# compared to non-TE sequence split by cCRE annotation
+
+# Generate the underlying files linking TEs with cCREs
+awk '{OFS="\t"; if ($10 != "Low-DNase") print}' k562_ccres.bed | sort -k1,1 -k2,2n | bedtools intersect -sorted -wao -f 0.5 -a stdin -b <(zcat TE_hg38.txt.gz) > active_k562_ccre_TEs.txt
+awk '{OFS="\t"; print $1 ":" $2 "-" $3 "|" $10}' active_k562_ccre_TEs.txt | sort | uniq > ccre_IDs.txt
+awk '{OFS="\t"; if ($12 != ".") print $1 ":" $2 "-" $3 "|" $10, $15, $16}' active_k562_ccre_TEs.txt | sort -k1,1 | groupBy -g 1 -c 2,3 -o distinct,distinct > uniq_te_ccre_IDs.txt
+
+# Add deepTools to path (required on our server)
+# export LC_ALL=en_US.utf-8; export LANG=en_US.utf-8
+# mkdir -p /workdir/$USER/tmp; export TMPDIR=/workdir/$USER/tmp
+# export PATH=/programs/deeptools-3.5.1/bin:$PATH; export PYTHONPATH=/programs/deeptools-3.5.1/lib64/python3.9/site-packages:/programs/deeptools-3.5.1/lib/python3.9/site-packages
+
+# Generate an intersection of TEs with the binned phastCons scores using deepTools multiBamSummary with TEs and phastCons scores as input! 
+multiBigwigSummary bins -bs 20 -v -b hg38.phastCons17way.bw -o trash -p 20 --labels phastCons17 --outRawCounts tmp
+sed '1d' tmp | sort -k1,1 -k2,2n --parallel=8 -S 10% > bins_phastCons17.txt 
+awk '{OFS="\t"; if ($4 == "nan") $4 = 0; print}' bins_phastCons17.txt > bins_noNa_phastCons17.txt
+zcat TE_hg38.txt.gz | bedtools intersect -sorted -wao -a stdin -b bins_noNa_phastCons17.txt | sort -k1,1 -k2,2n -S 10% --parallel=8 | groupBy -g 1-8 -c 12 -o mean > TE_bins_phastCons17.txt
+
+# This will generate all the average phastCons values for each of the cCREs for later use
+awk '{OFS="\t"; if ($10 != "Low-DNase") print $1, $2, $3, $1 ":" $2 "-" $3 "|" $10}' k562_ccres.bed | bedtools intersect -sorted -wao -a stdin -b bins_noNa_phastCons17.txt | sort -k1,1 -k2,2n --parallel=8 | groupBy -g 1-4 -c 8 -o mean | bedtools intersect -sorted -wao -a stdin -b <(sed '1d' lentiMPRA_k562.bed) | awk '{OFS="\t"; if ($12 == ".") {$12 = 0; $15 = 1} else {$15 = 0} print}' | cut -f1-5,12,15 | sort -k4,4 --parallel=8 | groupBy -g 1-6 -c 7 -o mean > k562_cCRE_phastCons_MPRA_bool.txt
+
+# Create a list of MPRA values that are neither TE-derived nor are within cCREs
+sed '1d' lentiMPRA_k562.bed | bedtools intersect -wa -v -a stdin -b <(awk '{OFS="\t"; if ($10 != "Low-DNase") print $1, $2, $3}' k562_ccres.bed) | bedtools intersect -wa -v -a stdin -b TE_bins_phastCons17.txt > filt_noncCRE_nonTE_MPRA_bool.txt
+
+# Create a list of MPRA values that are TE-derived but are not within cCREs
+bedtools intersect -sorted -wao -a TE_bins_phastCons17.txt -b <(sed '1d' lentiMPRA_k562.bed) | awk '{OFS="\t"; if ($16 == ".") {$16 = 0; $19 = 1} else {$19 = 0} print}' | awk '{OFS="\t"; print $1, $2, $3, $1 ":" $2 "-" $3 "|" $4, $4, $5, $6, $7, $8, $9, $16, $19}' | sort -k4,4 --parallel=8 | groupBy -g 1-11 -c 12 -o mean > TE_phastCons_MPRA_bool.txt
+awk '{OFS="\t"; if ($10 != "Low-DNase") print $1, $2, $3, $1 ":" $2 "-" $3 "|" $10}' k562_ccres.bed | bedtools intersect -wa -v -a TE_phastCons_MPRA_bool.txt -b stdin | awk '{OFS="\t"; if ($12 != "1") print}' > filt_noncCRE_TE_phastCons_MPRA_bool.txt
+
+# Run the script to generate figure 5a
+Rscript mpraCCRE.r --vanilla
+
+
+### Figure 5c
+# This figure uses the lentivirus MPRA data, TE annotations, K562 TF ChIP-seq, and PhastCons to measure how human lineage intervals (both TE
+# and nonTE) overlap with genomic indicators of cis-regulatory activity
+
+### NOTE: The below file "human_cCREs_with_mouse_compare.txt" is the output of the cCRE orthology/turnover analysis, and should be either 
+### downloadable or generatable with code for figure 4
+
+# Select the "Human_specific" and "Human_TE" + "Human_cCRE" categories 
+sed '1d' human_cCREs_with_mouse_compare.txt | awk '{OFS="\t"; if ($22 == "Human_TE" && $23 == "Human_cCRE") print $1 "|" $4 }' | awk '{OFS="\t"; gsub(":", "\t", $1); gsub("\\|", "\t", $1); print}' | awk '{OFS="\t"; gsub("-", "\t", $2); print }' | awk '{OFS="\t"; print $1, $2, $3, $1 ":" $2 "-" $3 "|" $4}' > ccre_te 
+sed '1d' human_cCREs_with_mouse_compare.txt | awk '{OFS="\t"; if ($22 == "Human_specific") print $1 "|" $4 }' | awk '{OFS="\t"; gsub(":", "\t", $1); gsub("\\|", "\t", $1); print}' | awk '{OFS="\t"; gsub("-", "\t", $2); print }' | awk '{OFS="\t"; print $1, $2, $3, $1 ":" $2 "-" $3 "|" $4}' > ccre_nonte
+
+# ChIP  
+# Make a temporary directory for all the output files and a base file for some of the below commands (init)
+mkdir chip_tmp
+cat <(awk '{OFS="\t"; print $0, "TE"}' ccre_te) <(awk '{OFS="\t"; print $0, "nonTE"}' ccre_nonte) | sort -k1,1 -k2,2n --parallel=8 -S 10% > init
+
+# Create a command list to iterate over all the necessary files
+> chip_cmds
+for f in 0_beds/*.bed; do echo "awk '{OFS=\"\\t\"; print \$1, \$2 + \$10, \$2 + \$10 + 1}' $f | sort -k1,1 -k2,2n -S 5% | bedtools intersect -sorted -u -wa -a init -b stdin | awk '{OFS=\"\\t\"; print \$0, \"`echo $f | sed 's|.*/||g' | sed 's|.bed||g'`\"}' > chip_tmp/`echo $f | sed 's|.*/||g' | sed 's|.bed||g'`" >> chip_cmds; done
+while read cmd; do $cmd; done < chip_cmds
+
+# Read through all the files in chip_tmp and combine them together
+cat chip_tmp/* | sort -k1,1 -k2,2n --parallel=8 -S 10% | groupBy -g 1-5 -c 6 -o collapse | awk '{OFS="\t"; print $0, gsub(/,/,"", $6) + 1}' | awk '{OFS="\t"; print $1, $2, $3, $4, $5, $7, $6}' > combined_ccre_chip
+rm -r chip_tmp
+
+# PhastCons 
+bedtools intersect -sorted -wao -a init -b bins_noNa_phastCons17.txt | sort -k1,1 -k2,2n -S 10% --parallel=8 | groupBy -g 1-5 -c 9 -o mean > ccre_both_bins_phastCons17.txt
+
+# MPRA
+sed '1d' lentiMPRA_k562.bed | bedtools intersect -sorted -wa -wb -a ccre_te -b stdin | cut -f1-4,11-13 | groupBy -g 1-4 -c 5,6,7 -o max,max,max | awk '{if ($5 >= 1) print $4}' > ccre_te_mpra
+sed '1d' lentiMPRA_k562.bed | bedtools intersect -sorted -wa -wb -a ccre_nonte -b stdin | cut -f1-4,11-13 | groupBy -g 1-4 -c 5,6,7 -o max,max,max | awk '{if ($5 >= 1) print $4}' > ccre_nonte_mpra
+
+# ATAC
+bedtools intersect -sorted -u -wa -a ccre_te -b K562_atac_summits.bed | awk '{OFS="\t"; print $4}' > ccre_te_atac
+bedtools intersect -sorted -u -wa -a ccre_nonte -b K562_atac_summits.bed | awk '{OFS="\t"; print $4}' > ccre_nonte_atac
+
+# Run the script to generate figure 5b
+Rscript vennDiagram.r --vanilla
+
+
+
+### Figure 4c/d 
+# These figures use TF ChIP-seq in K562 cells and MEL cells alongside liftOver to identify likely examples of turnover events between human
+# and mouse
+
+# For each downloaded mouse factor, append it to a list and identify which of these intervals overlap TEs or not
+> factors
+for f in $(ls 1_mouseTFs/*[1-9].bed | sed 's|.*/||' | sed 's|.....$||' | uniq) 
+do 
+	echo "${f:0:-1}" >> factors
+	cat $(ls 1_mouseTFs/"${f}"*.bed) | egrep -v 'chrY|chrM|chrUn|_random' | awk '{OFS="\t"; print $1, $2 + $10, $2 + $10 + 1, $2, $3 }' | sort -k1,1 -k2,2n | bedtools intersect -sorted -wa -a stdin -b <( zcat TE_mm10.txt.gz ) | uniq | awk '{OFS="\t"; print $1, $4, $5, $2, $3 }' | sort -k1,1 -k2,2n | bedtools intersect -sorted -wao -a stdin -b <( zcat TE_mm10.txt.gz ) > tmp
+	bedtools intersect -sorted -wa -wb -a <(awk '{OFS="\t"; print $1, $4, $5, $2, $3}' tmp | sort -k1,1 -k2,2n | uniq) -b <(cut -f6-15 tmp | sort -k1,1 -k2,2n) | sort -k15,15nr | awk '!a[$14]++ {OFS="\t"; print $1, $4, $5, $14 "|" $10, $15}' | sort -k1,1 -k2,2n | bedtools merge -c 4,5 -o distinct,distinct > TE
+	cat $(ls 1_mouseTFs/"${f}"*.bed) | egrep -v 'chrY|chrM|chrUn|_random' | awk '{OFS="\t"; print $1, $2 + $10, $2 + $10 + 1, $2, $3 }' | sort -k1,1 -k2,2n | bedtools intersect -sorted -v -wa -a stdin -b <( zcat TE_mm10.txt.gz ) | uniq | awk '{OFS="\t"; print $1, $4, $5, ".", "0"}' > nonTE
+	Rscript --vanilla orthCleanUp.r TE fTE F
+	cat nonTE fTE | sort -k1,1 -k2,2n | bedtools merge -c 4,5 -o distinct,distinct | sed 's|\.,||g;s|\t0,|\t|g' > fTE2
+	if [[ `grep "," fTE2 | wc -l` -ne "0" ]]
+	then 
+		Rscript --vanilla orthCleanUp.r fTE2 fTE T
+		sort -k1,1 -k2,2n fTE | awk '{OFS="\t"; if ( $4 != "." ) { if ( !($4 ~ /,/) ) { print $0, $1 ":" $2 "-" $3 "|M|TE" } else { print $0, $1 ":" $2 "-" $3 "|M|MultTE" } } else { print $1, $2, $3, $4, $1 ":" $2 "-" $3 "|M|NonTE" } }' > 1_mouseTFs/"${f:0:-1}"
+	else
+		sort -k1,1 -k2,2n fTE2 | cut -f1-4 | awk '{OFS="\t"; if ( $4 != "." ) { if ( !($4 ~ /,/) ) { print $0, $1 ":" $2 "-" $3 "|M|TE" } else { print $0, $1 ":" $2 "-" $3 "|M|MultTE" } } else { print $1, $2, $3, $4, $1 ":" $2 "-" $3 "|M|NonTE" } }' > 1_mouseTFs/"${f:0:-1}"
+	fi
+done
+
+
+# Now to do the above for the human samples!
+mkdir 2_humanTFs
+> fullFactor
+while read f 
+do 
+	if [[ $(ls 0_beds/"${f}"_[1-9]*) ]]
+	then 
+		echo $f >> fullFactor
+		cat $(ls 0_beds/"${f}"_[1-9]*) | egrep -v 'chrY|chrM|chrUn|_random' | awk '{OFS="\t"; print $1, $2 + $10, $2 + $10 + 1, $2, $3 }' | sort -k1,1 -k2,2n | bedtools intersect -sorted -wa -a stdin -b <( zcat TE_hg38.txt.gz ) | uniq | awk '{OFS="\t"; print $1, $4, $5, $2, $3 }' | sort -k1,1 -k2,2n | bedtools intersect -sorted -wao -a stdin -b <( zcat TE_hg38.txt.gz ) > tmp
+		bedtools intersect -sorted -wa -wb -a <(awk '{OFS="\t"; print $1, $4, $5, $2, $3}' tmp | sort -k1,1 -k2,2n | uniq) -b <(cut -f6-15 tmp | sort -k1,1 -k2,2n) | sort -k15,15nr | awk '!a[$14]++ {OFS="\t"; print $1, $4, $5, $14 "|" $10, $15}' | sort -k1,1 -k2,2n | bedtools merge -c 4,5 -o distinct,distinct > TE
+		cat $(ls 0_beds/"${f}"_[1-9]*) | egrep -v 'chrY|chrM|chrUn|_random' | awk '{OFS="\t"; print $1, $2 + $10, $2 + $10 + 1, $2, $3 }' | sort -k1,1 -k2,2n | bedtools intersect -sorted -v -wa -a stdin -b <( zcat TE_hg38.txt.gz ) | uniq | awk '{OFS="\t"; print $1, $4, $5, ".", "0"}' > nonTE
+		Rscript --vanilla orthCleanUp.r TE fTE F
+		cat nonTE fTE | sort -k1,1 -k2,2n | bedtools merge -c 4,5 -o distinct,distinct | sed 's|\.,||g;s|\t0,|\t|g' > fTE2
+		if [[ `grep "," fTE2 | wc -l` -ne "0" ]]
+		then 
+			Rscript --vanilla orthCleanUp.r fTE2 fTE T
+			sort -k1,1 -k2,2n fTE | awk '{OFS="\t"; if ( $4 != "." ) { if ( !($4 ~ /,/) ) { print $0, $1 ":" $2 "-" $3 "|H|TE" } else { print $0, $1 ":" $2 "-" $3 "|H|MultTE" } } else { print $1, $2, $3, $4, $1 ":" $2 "-" $3 "|H|NonTE" } }' > 2_humanTFs/"${f}"
+		else
+			sort -k1,1 -k2,2n fTE2 | cut -f1-4 | awk '{OFS="\t"; if ( $4 != "." ) { if ( !($4 ~ /,/) ) { print $0, $1 ":" $2 "-" $3 "|H|TE" } else { print $0, $1 ":" $2 "-" $3 "|H|MultTE" } } else { print $1, $2, $3, $4, $1 ":" $2 "-" $3 "|H|NonTE" } }' > 2_humanTFs/"${f}"
+		fi
+	else 
+		echo "No non-audit human data for" $f
+	fi
+done < factors
+
+# Remove all the temporary files
+rm tmp TE nonTE fTE fTE2
+
+# Iterate only through the elements listed in fullFactor since those are the ones which have satisfactory data in *both* human and mouse.
+# Use the peak coords of each of the factors identified in fullFactor to run liftOver! 
+while read f; do ~/liftOver 1_mouseTFs/$f /workdir/jdc397/repeatMasker/chains/mm10.hg38.rbest.chain.gz 2_humanTFs/mm10.hg38."${f}"_liftOver10.lo 2_humanTFs/mm10.hg38."${f}"_noMatch_liftOver10.lo -bedPlus=3 -minMatch=0.10; done < fullFactor
+while read f; do ~/liftOver 2_humanTFs/$f /workdir/jdc397/repeatMasker/chains/hg38.mm10.rbest.chain.gz 1_mouseTFs/hg38.mm10."${f}"_liftOver10.lo 1_mouseTFs/hg38.mm10."${f}"_noMatch_liftOver10.lo -bedPlus=3 -minMatch=0.10; done < fullFactor
+
+# Intersect the first liftOver results against the base coordinates to identify putative orthologous sequences with/without orthologous 
+# binding activity. 
+while read f; do sort -k1,1 -k2,2n 2_humanTFs/mm10.hg38."${f}"_liftOver10.lo | bedtools intersect -e -f 0.5 -F 0.5 -sorted -wao -a stdin -b 2_humanTFs/"${f}" | cut -f1-5,9-10 > 2_humanTFs/mm10.hg38."${f}".int; done < fullFactor
+while read f; do sort -k1,1 -k2,2n 1_mouseTFs/hg38.mm10."${f}"_liftOver10.lo | bedtools intersect -e -f 0.5 -F 0.5 -sorted -wao -a stdin -b 1_mouseTFs/"${f}" | cut -f1-5,9-10 > 1_mouseTFs/hg38.mm10."${f}".int; done < fullFactor
+
+# Run the liftOver again, back to the species of origin to identify reciprocal orthology! Yay
+while read f; do ~/liftOver 1_mouseTFs/hg38.mm10."${f}".int /workdir/jdc397/repeatMasker/chains/mm10.hg38.rbest.chain.gz 2_humanTFs/mm10.hg38."${f}"_liftOver10.lo2 2_humanTFs/mm10.hg38."${f}"_noMatch_liftOver10.lo2 -bedPlus=3 -minMatch=0.10; done < fullFactor
+while read f; do ~/liftOver 2_humanTFs/mm10.hg38."${f}".int /workdir/jdc397/repeatMasker/chains/hg38.mm10.rbest.chain.gz 1_mouseTFs/hg38.mm10."${f}"_liftOver10.lo2 1_mouseTFs/hg38.mm10."${f}"_noMatch_liftOver10.lo2 -bedPlus=3 -minMatch=0.10; done < fullFactor
+
+# Now make the final intersect against the original coords to confirm the orthology is reciprocal. 
+while read f; do sort -k1,1 -k2,2n 2_humanTFs/mm10.hg38."${f}"_liftOver10.lo2 | bedtools intersect -f 0.5 -sorted -wao -a stdin -b 2_humanTFs/"${f}" | cut -f1-7,11-12 > 2_humanTFs/mm10.hg38."${f}".int2; done < fullFactor
+while read f; do sort -k1,1 -k2,2n 1_mouseTFs/hg38.mm10."${f}"_liftOver10.lo2 | bedtools intersect -f 0.5 -sorted -wao -a stdin -b 1_mouseTFs/"${f}" | cut -f1-7,11-12 > 1_mouseTFs/hg38.mm10."${f}".int2; done < fullFactor
+
+# Finally, create a base file that you will load into R to identify which sequences are orthologous or not 
+while read f
+do 
+	bedtools intersect -F 0.5 -v -wa -a 2_humanTFs/mm10.hg38."${f}"_liftOver10.lo -b 2_humanTFs/"${f}" | cat - 2_humanTFs/"${f}" | egrep -v 'chrY|chrM|chrUn|_random' | sort -k1,1 -k2,2n > tmp 
+	awk '{OFS="\t"; print $1, $2, $3, $2, $3, $4, $5}' tmp | bedtools slop -i stdin -b 5000 -g hg38.chrom.sizes | bedtools intersect -wao -F 0.5 -a stdin -b tmp > tmp2
+	awk 'NR==FNR { a[$7]++; next } {OFS="\t"; if ( $7 == $12 && a[$7] == 1 ) { print $1, $2, $3, $4, $5, $6, $7, "." } else if ( $7 == $12 && a[$7] > 1 ) { next } else { print $1, $2, $3, $4, $5, $6, $7, $12 } }' tmp2 tmp2 | sort -k1,1 -k2,2n > 2_humanTFs/"${f}"_5kb
+	
+	bedtools intersect -F 0.5 -v -wa -a 1_mouseTFs/hg38.mm10."${f}"_liftOver10.lo -b 1_mouseTFs/"${f}" | cat - 1_mouseTFs/"${f}" | egrep -v 'chrY|chrM|chrUn|_random' | sort -k1,1 -k2,2n > tmp
+	awk '{OFS="\t"; print $1, $2, $3, $2, $3, $4, $5}' tmp | bedtools slop -i stdin -b 5000 -g mm10.chrom.sizes | bedtools intersect -wao -F 0.5 -a stdin -b tmp > tmp2
+	awk 'NR==FNR { a[$7]++; next } {OFS="\t"; if ( $7 == $12 && a[$7] == 1 ) { print $1, $2, $3, $4, $5, $6, $7, "." } else if ( $7 == $12 && a[$7] > 1 ) { next } else { print $1, $2, $3, $4, $5, $6, $7, $12 } }' tmp2 tmp2 | sort -k1,1 -k2,2n > 1_mouseTFs/"${f}"_5kb
+done < fullFactor
+rm tmp tmp2
+
+# Run orthMerge_manual.r code on the files for each of the different samples above
+Rscript --vanilla orthMerge_manual.r
+
+# Finally, use bedtools groupby to combine all the within 5kb files into a file with each row featuring a unique ID so you can filter out 
+# all the instances that seem like examples of putative turnover occuring in both human and mouse
+while read f; do head -n 1 2_humanTFs/"${f}"_5kb_merge > tmp; sed '1d' 2_humanTFs/"${f}"_5kb_merge | sort -k8,8 | groupBy -g 1-8 -c 9 -o distinct | sort -k1,1 -k2,2n >> tmp; cat tmp > 2_humanTFs/"${f}"_full_5kb_merge; done < fullFactor
+while read f; do head -n 1 1_mouseTFs/"${f}"_5kb_merge > tmp; sed '1d' 1_mouseTFs/"${f}"_5kb_merge | sort -k8,8 | groupBy -g 1-8 -c 9 -o distinct | sort -k1,1 -k2,2n >> tmp; cat tmp > 1_mouseTFs/"${f}"_full_5kb_merge; done < fullFactor
+rm tmp
+
+# Create input files to infer which putative turnover events are ancestral
+awk '{OFS="\t"; if ($1 ~ "Both") print}' `date +'%m%d%y'`_syntenicPeaks_human.txt | pigz -p 8 > `date +'%m%d%y'`_syntenicPeaks_bothBound_human.txt.gz
+awk '{OFS="\t"; if ($1 ~ "Both") print}' `date +'%m%d%y'`_syntenicPeaks_mouse.txt | pigz -p 8 > `date +'%m%d%y'`_syntenicPeaks_bothBound_mouse.txt.gz
+
+# Create more input files for ancestral TF binding site inference
+printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t\n' "chr" "start" "end" "TE_ID" "peak_ID" "nearest_peak_ID" "dist_to_PLS" "factor" > `date +'%m%d%y'`_topHuman_putativeTurnover.txt
+printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t\n' "chr" "start" "end" "TE_ID" "peak_ID" "nearest_peak_ID" "dist_to_PLS" "factor" > `date +'%m%d%y'`_topMouse_putativeTurnover.txt
+while read f
+do
+	sed '1d' 2_humanTFs/"${f}"_full_5kb_merge | awk '{OFS="\t"; $10 = gsub(",", ",", $9); $11 = gsub("\\|M\\|", "|M|", $9); if ($11 == $10 + 1 && $8 ~ "\\|H\\|" && $5 != 1) print $1, $2, $3, $7, $8, $9}' > tmp
+	paste tmp <(awk '{OFS="\t"; if ($4 == ".") { print $1, $2, $3 } else { print $4 } }' tmp | sed 's/:/\t/g;s/-/\t/g;s/|.*//g' | awk '{OFS="\t"; print $0, ".", "-1", "-1", ".", "-1", ".", "0"}' | bedtools closest -d -t first -a stdin -b k562_pls.bed | awk -v a=$f '{OFS="\t"; if ($4 != ".") { print $4 ":" $5 "-" $6 "|" $7, $14, a } else { print $14, a } }') >> `date +'%m%d%y'`_topHuman_putativeTurnover.txt
+	sed '1d' 1_mouseTFs/"${f}"_full_5kb_merge | awk '{OFS="\t"; $10 = gsub(",", ",", $9); $11 = gsub("\\|H\\|", "|H|", $9); if ($11 == $10 + 1 && $8 ~ "\\|M\\|" && $5 != 1) print $1, $2, $3, $7, $8, $9}' > tmp
+	paste tmp <(awk '{OFS="\t"; if ($4 == ".") { print $1, $2, $3 } else { print $4 } }' tmp | sed 's/:/\t/g;s/-/\t/g;s/|.*//g' | awk '{OFS="\t"; print $0, ".", "-1", "-1", ".", "-1", ".", "0"}' | bedtools closest -d -t first -a stdin -b k562_pls.bed | awk -v a=$f '{OFS="\t"; if ($4 != ".") { print $4 ":" $5 "-" $6 "|" $7, $14, a } else { print $14, a } }') >> `date +'%m%d%y'`_topMouse_putativeTurnover.txt
+done < fullFactor
+
+#Use orthologous TF binding sites to determine a phastCons threshold for inferring which TF binding site (if any) is ancestral
+#Get bedGraph files of phastCons
+ln -s ../human_mouse_cCRE_comparison/hg38.phastCons100way.sorted.bedGraph .
+wget https://hgdownload.soe.ucsc.edu/goldenPath/mm10/phastCons60way/mm10.60way.phastCons.bw
+bigWigToBedGraph mm10.60way.phastCons.bw mm10.phastCons60way.bedGraph
+#Get phastCons scores for TF binding sites
+#Syntenic peaks in human and mouse
+cut -f 1 031723_syntenicPeaks_bothBound_human.txt | cut -d"|" -f 1 | sed -e 's/:/\t/g' -e 's/-/\t/g' | sort -k1,1 -k2,2n > syntenicPeaks_human_hg38regions.bed
+cut -f 2 031723_syntenicPeaks_bothBound_human.txt | cut -d"|" -f 1 | sed -e 's/:/\t/g' -e 's/-/\t/g' | sort -k1,1 -k2,2n > syntenicPeaks_human_mm10regions.bed
+cut -f 1 031723_syntenicPeaks_bothBound_mouse.txt | cut -d"|" -f 1 | sed -e 's/:/\t/g' -e 's/-/\t/g' | sort -k1,1 -k2,2n > syntenicPeaks_mouse_mm10regions.bed
+cut -f 2 031723_syntenicPeaks_bothBound_mouse.txt | cut -d"|" -f 1 | sed -e 's/:/\t/g' -e 's/-/\t/g' | sort -k1,1 -k2,2n > syntenicPeaks_mouse_hg38regions.bed
+#Top putative turnover sites
+cut -f 5 031723_topHuman_putativeTurnover.txt | tail -n+2 | cut -d"|" -f 1 | sed -e 's/:/\t/g' -e 's/-/\t/g' | sort -k1,1 -k2,2n > topHuman_putativeTurnover_humanSites.bed
+cut -f 5 031723_topMouse_putativeTurnover.txt | tail -n+2 | cut -d"|" -f 1 | sed -e 's/:/\t/g' -e 's/-/\t/g' | sort -k1,1 -k2,2n > topMouse_putativeTurnover_mouseSites.bed
+cut -f 6 031723_topHuman_putativeTurnover.txt | tail -n+2 | sed 's/,/\n/g' | cut -d"|" -f 1 | sed -e 's/:/\t/g' -e 's/-/\t/g' | sort -k1,1 -k2,2n > topHuman_putativeTurnover_mouseSites.bed
+cut -f 6 031723_topMouse_putativeTurnover.txt | tail -n+2 | sed 's/,/\n/g' | cut -d"|" -f 1 | sed -e 's/:/\t/g' -e 's/-/\t/g' | sort -k1,1 -k2,2n > topMouse_putativeTurnover_humanSites.bed
+#Intersect with phastCons scores
+bedtools intersect -wao -sorted -a syntenicPeaks_human_hg38regions.bed -b hg38.phastCons100way.sorted.bedGraph > overlap_syntenicPeaks_human_hg38_phastCons100way
+bedtools intersect -wao -sorted -a syntenicPeaks_mouse_mm10regions.bed -b mm10.phastCons60way.bedGraph > overlap_syntenicPeaks_mouse_mm10_phastCons100way
+bedtools intersect -wao -sorted -a topHuman_putativeTurnover_humanSites.bed -b hg38.phastCons100way.sorted.bedGraph > overlap_topHumanPutativeTurnover_humanSites_phastCons100way
+bedtools intersect -wao -sorted -a topMouse_putativeTurnover_mouseSites.bed -b mm10.phastCons60way.bedGraph > overlap_topMousePutativeTurnover_mouseSites_phastCons60way
+bedtools intersect -wao -sorted -a topHuman_putativeTurnover_mouseSites.bed -b mm10.phastCons60way.bedGraph > overlap_topHumanPutativeTurnover_mouseSites_phastCons60way
+bedtools intersect -wao -sorted -a topMouse_putativeTurnover_humanSites.bed -b hg38.phastCons100way.sorted.bedGraph > overlap_topMousePutativeTurnover_humanSites_phastCons100way
+bedtools intersect -wao -sorted -a syntenicPeaks_human_mm10regions.bed -b mm10.phastCons60way.bedGraph > overlap_syntenicPeaks_human_mm10_phastCons60way
+bedtools intersect -wao -sorted -a syntenicPeaks_mouse_hg38regions.bed -b hg38.phastCons100way.sorted.bedGraph > overlap_syntenicPeaks_mouse_hg38_phastCons100way
+#Combine phastCons scores for each peak
+python3 combine_phastcons_scores_v1.py overlap_syntenicPeaks_human_hg38_phastCons100way overlap_syntenicPeaks_human_hg38_phastCons100way_combined > noOverlap_syntenicPeaks_human_hg38_phastCons100way
+python3 combine_phastcons_scores_v1.py overlap_syntenicPeaks_mouse_mm10_phastCons100way overlap_syntenicPeaks_mouse_mm10_phastCons100way_combined > noOverlap_syntenicPeaks_mouse_mm10_phastCons100way
+python3 combine_phastcons_scores_v1.py overlap_topHumanPutativeTurnover_humanSites_phastCons100way overlap_topHumanPutativeTurnover_humanSites_phastCons100way_combined > noOverlap_topHumanPutativeTurnover_humanSites_phastCons100way
+python3 combine_phastcons_scores_v1.py overlap_topMousePutativeTurnover_mouseSites_phastCons60way overlap_topMousePutativeTurnover_mouseSites_phastCons60way_combined > noOverlap_topMousePutativeTurnover_mouseSites_phastCons60way
+python3 combine_phastcons_scores_v1.py overlap_topHumanPutativeTurnover_mouseSites_phastCons60way overlap_topHumanPutativeTurnover_mouseSites_phastCons60way_combined > noOverlap_topHumanPutativeTurnover_mouseSites_phastCons60way
+python3 combine_phastcons_scores_v1.py overlap_topMousePutativeTurnover_humanSites_phastCons100way overlap_topMousePutativeTurnover_humanSites_phastCons100way_combined > noOverlap_topMousePutativeTurnover_humanSites_phastCons100way
+python3 combine_phastcons_scores_v1.py overlap_syntenicPeaks_human_mm10_phastCons60way overlap_syntenicPeaks_human_mm10_phastCons60way_combined > noOverlap_syntenicPeaks_human_mm10_phastCons60way
+python3 combine_phastcons_scores_v1.py overlap_syntenicPeaks_mouse_hg38_phastCons100way overlap_syntenicPeaks_mouse_hg38_phastCons100way_combined > noOverlap_syntenicPeaks_mouse_hg38_phastCons100way
+#Get syntenic peak phastCons scores for each TF
+python3 assign_phastCons_syntenicPeaks.py 031723_syntenicPeaks_bothBound_human.txt overlap_syntenicPeaks_human_hg38_phastCons100way_combined overlap_syntenicPeaks_human_mm10_phastCons60way_combined syntenicPeaks_human_phastCons
+python3 assign_phastCons_syntenicPeaks.py 031723_syntenicPeaks_bothBound_mouse.txt overlap_syntenicPeaks_mouse_mm10_phastCons100way_combined overlap_syntenicPeaks_mouse_hg38_phastCons100way_combined syntenicPeaks_mouse_phastCons
+python3 calc_syntenicPeaks_phastCons_summary.py syntenicPeaks_human_phastCons summary_syntenicPeaks_human_phastCons
+python3 calc_syntenicPeaks_phastCons_summary.py syntenicPeaks_mouse_phastCons summary_syntenicPeaks_mouse_phastCons
+#Get top putative turnover event phastCons scores
+python3 assign_phastCons_topPeaks.py 031723_topHuman_putativeTurnover.txt overlap_topHumanPutativeTurnover_humanSites_phastCons100way_combined overlap_topHumanPutativeTurnover_mouseSites_phastCons60way_combined topHuman_putativeTurnover_phastCons
+python3 assign_phastCons_topPeaks.py 031723_topMouse_putativeTurnover.txt overlap_topMousePutativeTurnover_mouseSites_phastCons60way_combined overlap_topMousePutativeTurnover_humanSites_phastCons100way_combined topMouse_putativeTurnover_phastCons
+#Call putative turnover events using phastCons filter
+python3 call_likely_turnover_v2.py topHuman_putativeTurnover_phastCons summary_syntenicPeaks_human_phastCons primate_human_lineage_TEs rodent_mouse_lineage_TEs v2_topHuman_putativeTurnover_phastCons_filter
+python3 call_likely_turnover_v2.py topMouse_putativeTurnover_phastCons summary_syntenicPeaks_mouse_phastCons rodent_mouse_lineage_TEs primate_human_lineage_TEs v2_topMouse_putativeTurnover_phastCons_filter
+
+# Run the R scripts to generate figures 4c...
+Rscript --vanilla liftOverBars.r
+
+# ... and 4d
+Rscript --vanilla putativeTurnover.r
