@@ -1,0 +1,4 @@
+http://hgdownload.cse.ucsc.edu/goldenPath/mm10/vsHg38/reciprocalBest/hg38.mm10.rbest.chain.gz
+http://hgdownload.cse.ucsc.edu/goldenPath/mm10/vsHg38/reciprocalBest/mm10.hg38.rbest.chain.gz
+https://hgdownload.soe.ucsc.edu/goldenPath/hg38/liftOver/hg38ToMm10.over.chain.gz
+https://hgdownload.soe.ucsc.edu/goldenPath/mm10/liftOver/mm10ToHg38.over.chain.gz

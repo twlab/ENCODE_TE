@@ -1,0 +1,3 @@
+https://www.ebi.ac.uk/gwas/api/search/downloads/alternative
+https://www.ebi.ac.uk/gwas/api/search/downloads/trait_mappings
+http://hgdownload.soe.ucsc.edu/gbdb/hg38/snp/dbSnp153.bb
