@@ -145,6 +145,7 @@ for i in `cat list_length_biased_subfamilies_kstest_conservative_wRandom_v3`; do
                         fimo --o motif_scan_individual_TEs_randomMax_v3/"$i"/"$motif" --max-stored-scores 1000000 --verbosity 1 --thresh 1E-4 --motif "$motif" /meme/5.4.1/db/motif_databases/HUMAN/HOCOMOCOv11_core_HUMAN_mono_meme_format.meme sequences_TEsubfamilies/"$i".fa &
                         if [ $counter == 12 ]; then
                                 wait
+                                counter=0
                         fi
                 fi
         done
@@ -202,6 +203,7 @@ for i in `cat list_coverage_controlled_subfamilies`; do
         ame --oc AME_enriched_motifs_hg38_ccres_coverageControl/"$i" --control controlled_coverage_background/"$i"_background.fa sequences_TEsubfamilies_separatedBy_hg38_ccre_overlap/"$i"_overlap.fa /meme/5.4.1/db/motif_databases/HUMAN/HOCOMOCOv11_core_HUMAN_mono_meme_format.meme &
         if [ $counter == 12 ]; then
                 wait
+                counter=0
         fi
 done
 wait
@@ -226,6 +228,7 @@ for i in `cat list_coverage_controlled_subfamilies`; do
                         fimo --o motif_scan_individual_TEs_randomMax_v3/"$i"/"$motif" --max-stored-scores 1000000 --verbosity 1 --thresh 1E-4 --motif "$motif" /meme/5.4.1/db/motif_databases/HUMAN/HOCOMOCOv11_core_HUMAN_mono_meme_format.meme sequences_TEsubfamilies/"$i".fa &
                         if [ $counter == 12 ]; then
                                 wait
+                                counter=0
                         fi
                 fi
         done
