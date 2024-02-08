@@ -35,7 +35,7 @@ wget https://www.dfam.org/releases/Dfam_3.6/families/Dfam_curatedonly.embl.gz
 gunzip Dfam_curatedonly.embl.gz
 #Convert from embl to fasta format
 tail -n+32 Dfam_curatedonly.embl > dfam.embl
-seqret -sequence test.embl -sformat1 embl -outseq Dfam_curatedonly.fa -osformat2 pearson
+seqret -sequence dfam.embl -sformat1 embl -outseq Dfam_curatedonly.fa -osformat2 pearson
 
 #Get TE subfamily Clades from Dfam
 python3 get_clades_dfam.py dfam.embl clades_dfam_all_TEs
