@@ -41,7 +41,6 @@ python3 match_elements_after_liftOver_intersect_hg38mm10.py reciprocal_mouse/all
 
 python3 parse_liftOver_match_ccre.py reciprocal_mouse/liftOver_mm10_ccre_TE_overlap_matched_hg38_ccre reciprocal_mouse/summary_mm10_hg38_ccre_liftOver
 python3 parse_liftOver_match_TE.py reciprocal_mouse/liftOver_mm10_ccre_TE_overlap_matched_hg38_TE reciprocal_mouse/summary_mm10_hg38_TE_liftOver
-python3 reciprocal_mouse/quantify_mouse_human_ccre_TEs.py reciprocal_mouse/summary_mm10_hg38_ccre_liftOver reciprocal_mouse/summary_mm10_hg38_TE_liftOver ../age_calculation/kimura_distance_mm10.tsv ../age_calculation/kimura_distance_hg38.tsv reciprocal_mouse/test_summary
 python3 quantify_mouse_human_ccre_TEs_v2.py reciprocal_mouse/summary_mm10_hg38_ccre_liftOver reciprocal_mouse/summary_mm10_hg38_TE_liftOver ../age_calculation/kimura_distance_hg38.tsv ../age_calculation/kimura_distance_mm10.tsv reAnno_mm10_ENCOTE.bed reciprocal_mouse/final_info_mouse > reciprocal_mouse/final_summary_mouse 2> reciprocal_mouse/final_info_mouse_nonMatching_TE_cCREs
 python3 edit_summary_forR.py reciprocal_mouse/final_summary_mouse reciprocal_mouse/forR_final_summary_mouse
 cat <(tail -n18 reciprocal_mouse/final_summary_mouse | head -n6 | sed 's/#//g' | cut -f 1-4,6) <(tail -n10 reciprocal_mouse/final_summary_mouse | head -n5 | sed 's/#//g') > reciprocal_mouse/forR_summary_novel_mouse
