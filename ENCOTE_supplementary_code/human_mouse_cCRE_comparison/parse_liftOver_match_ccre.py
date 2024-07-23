@@ -37,7 +37,10 @@ with open(sys.argv[1], 'r') as f:
 				liftover_ccre = 'NA'
 				new_line += '\t' + liftover_ccre + '\tNA\tNA\tNA\tNA'
 			else:
+			#Only takes the first liftOver cCRE if there are multiple that overlap
+			# This can happen if the cCREs are overlapping or if the liftOver is not one to one
+			# For counting purposes, selecting one is fine
 				liftover_ccre = fields[17] + ':' + fields[18] + '-' + fields[19]
-				new_line += '\t' + liftover_ccre + '\t' + '\t'.join(fields[20:])
+				new_line += '\t' + liftover_ccre + '\t' + '\t'.join(fields[20:24])
 			o.write(new_line + '\n')
 

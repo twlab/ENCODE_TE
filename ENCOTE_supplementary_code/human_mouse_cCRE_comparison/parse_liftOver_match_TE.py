@@ -37,7 +37,10 @@ with open(sys.argv[1], 'r') as f:
 				liftover_te = 'NA'
 				new_line += '\t' + liftover_te + '\tNA\tNA\t0'
 			else:
+			#Only takes the first liftOver TE if there are multiple that overlap
+			# This can happen if the TEs are overlapping or if the liftOver is not one to one
+			# For counting purposes, selecting one is fine
 				liftover_te = fields[17] + ':' + fields[18] + '-' + fields[19] + '(' + fields[22] + ')'
-				new_line += '\t' + liftover_te + '\t' + '\t'.join(fields[20:22]) + '\t' + fields[-1]
+				new_line += '\t' + liftover_te + '\t' + '\t'.join(fields[20:22]) + '\t' + fields[23]
 			o.write(new_line + '\n')
 
