@@ -9,9 +9,9 @@
 # pigz					| v2.5 from https://zlib.net/pigz/
 # awk					| GNU Awk 5.1.0, API: 3.0 (GNU MPFR 4.0.2, GNU MP 6.2.0)
 # kentUtils				| 2017-11-17 on server, otherwise from https://github.com/ENCODE-DCC/kentUtils
-# R						| v4.1.3 on a Rocky9 server
+# R					| v4.1.3 on a Rocky9 server
 # Python				| Python 3.9.10 (main, Sep 23 2022, 00:00:00) [GCC 11.2.1 20220127 (Red Hat 11.2.1-9)] on linux
-# multiBigwigSummary	| 3.5.1 (deepTools 3.5.1)
+# multiBigwigSummary			| 3.5.1 (deepTools 3.5.1)
 # liftOver				| https://hgdownload.cse.ucsc.edu/admin/exe/linux.x86_64/liftOver
 
 
@@ -62,10 +62,9 @@ wget https://www.encodeproject.org/files/ENCFF558BLC/@@download/ENCFF558BLC.bed.
 zcat K562_atac.narrowPeak.gz | awk '{OFS="\t"; $2 = $2 + $10; $3 = $2 + 1; print}' | sort -k1,1 -k2,2n | cut -f1-4 > K562_atac_summits.bed
 
 
-### hg38 17-way phastCons scores
-# Download the 17-way phastCons scores of human and 16 primates in hg38 coordinates. Large file!
-wget https://hgdownload.soe.ucsc.edu/goldenPath/hg38/phastCons17way/hg38.phastCons17way.bw 
-
+### hg38 30-way phastCons scores
+# Download the 30-way phastCons scores of human, a bunch of primate genomes, and a few others in hg38 coordinates. Large file!
+wget https://hgdownload.soe.ucsc.edu/goldenPath/hg38/phastCons30way/hg38.phastCons30way.bw
 
 ### hg38 TE Annotations
 # Download the hg38 TE annotations from RepeatMasker and use a custom script (controlMerge.v3.py) to merge nearby annotations
@@ -168,31 +167,10 @@ Rscript distPerm.r --vanilla
 # This figure uses the lentivirus MPRA data, cCRE annotations, and TE annotations to measure how different TEs are at driving enhancer activity
 # compared to non-TE sequence split by cCRE annotation
 
-# Generate the underlying files linking TEs with cCREs
-awk '{OFS="\t"; if ($10 != "Low-DNase") print}' k562_ccres.bed | sort -k1,1 -k2,2n | bedtools intersect -sorted -wao -f 0.5 -a stdin -b <(zcat TE_hg38.txt.gz) > active_k562_ccre_TEs.txt
-awk '{OFS="\t"; print $1 ":" $2 "-" $3 "|" $10}' active_k562_ccre_TEs.txt | sort | uniq > ccre_IDs.txt
-awk '{OFS="\t"; if ($12 != ".") print $1 ":" $2 "-" $3 "|" $10, $15, $16}' active_k562_ccre_TEs.txt | sort -k1,1 | groupBy -g 1 -c 2,3 -o distinct,distinct > uniq_te_ccre_IDs.txt
-
-# Add deepTools to path (required on our server)
-# export LC_ALL=en_US.utf-8; export LANG=en_US.utf-8
-# mkdir -p /workdir/$USER/tmp; export TMPDIR=/workdir/$USER/tmp
-# export PATH=/programs/deeptools-3.5.1/bin:$PATH; export PYTHONPATH=/programs/deeptools-3.5.1/lib64/python3.9/site-packages:/programs/deeptools-3.5.1/lib/python3.9/site-packages
-
-# Generate an intersection of TEs with the binned phastCons scores using deepTools multiBamSummary with TEs and phastCons scores as input! 
-multiBigwigSummary bins -bs 20 -v -b hg38.phastCons17way.bw -o trash -p 20 --labels phastCons17 --outRawCounts tmp
-sed '1d' tmp | sort -k1,1 -k2,2n --parallel=8 -S 10% > bins_phastCons17.txt 
-awk '{OFS="\t"; if ($4 == "nan") $4 = 0; print}' bins_phastCons17.txt > bins_noNa_phastCons17.txt
-zcat TE_hg38.txt.gz | bedtools intersect -sorted -wao -a stdin -b bins_noNa_phastCons17.txt | sort -k1,1 -k2,2n -S 10% --parallel=8 | groupBy -g 1-8 -c 12 -o mean > TE_bins_phastCons17.txt
-
-# This will generate all the average phastCons values for each of the cCREs for later use
-awk '{OFS="\t"; if ($10 != "Low-DNase") print $1, $2, $3, $1 ":" $2 "-" $3 "|" $10}' k562_ccres.bed | bedtools intersect -sorted -wao -a stdin -b bins_noNa_phastCons17.txt | sort -k1,1 -k2,2n --parallel=8 | groupBy -g 1-4 -c 8 -o mean | bedtools intersect -sorted -wao -a stdin -b <(sed '1d' lentiMPRA_k562.bed) | awk '{OFS="\t"; if ($12 == ".") {$12 = 0; $15 = 1} else {$15 = 0} print}' | cut -f1-5,12,15 | sort -k4,4 --parallel=8 | groupBy -g 1-6 -c 7 -o mean > k562_cCRE_phastCons_MPRA_bool.txt
-
-# Create a list of MPRA values that are neither TE-derived nor are within cCREs
-sed '1d' lentiMPRA_k562.bed | bedtools intersect -wa -v -a stdin -b <(awk '{OFS="\t"; if ($10 != "Low-DNase") print $1, $2, $3}' k562_ccres.bed) | bedtools intersect -wa -v -a stdin -b TE_bins_phastCons17.txt > filt_noncCRE_nonTE_MPRA_bool.txt
-
-# Create a list of MPRA values that are TE-derived but are not within cCREs
-bedtools intersect -sorted -wao -a TE_bins_phastCons17.txt -b <(sed '1d' lentiMPRA_k562.bed) | awk '{OFS="\t"; if ($16 == ".") {$16 = 0; $19 = 1} else {$19 = 0} print}' | awk '{OFS="\t"; print $1, $2, $3, $1 ":" $2 "-" $3 "|" $4, $4, $5, $6, $7, $8, $9, $16, $19}' | sort -k4,4 --parallel=8 | groupBy -g 1-11 -c 12 -o mean > TE_phastCons_MPRA_bool.txt
-awk '{OFS="\t"; if ($10 != "Low-DNase") print $1, $2, $3, $1 ":" $2 "-" $3 "|" $10}' k562_ccres.bed | bedtools intersect -wa -v -a TE_phastCons_MPRA_bool.txt -b stdin | awk '{OFS="\t"; if ($12 != "1") print}' > filt_noncCRE_TE_phastCons_MPRA_bool.txt
+# Combine all of the above inputs into a single file for ease of access with the following column structure:
+# chr	start	end	mpra_id	mpra_log2_fc	te_id	ccre_ID
+echo -e "chr\tstart\tend\tmpra_id\tmpra_log2_fc\tte_id\tccre_id" > lentiMPRA_cCRE_k562_TE.bed
+sed '1d' lentiMPRA_k562.bed | awk '{OFS="\t"; print $1, $2, $3, $1 ":" $2 "-" $3 "|" $4, $7}' | intersectBed -sorted -f 0.5 -wao -a stdin -b <(zcat TE_hg38.txt.gz) | awk '{OFS="\t"; if ($6 != ".") {print $1, $2, $3, $4, $5, $6 ":" $7 "-" $8 "|" $9} else {print $1, $2, $3, $4, $5, "non-TE"}}' | groupBy -g 1-5 -c 6 -o distinct | intersectBed -f 0.5 -wao -a stdin -b <(awk '{OFS="\t"; if ( $10 != "Low-DNase" ) print}' k562_ccres.bed) | awk '{OFS="\t"; if ($7 != ".") { print $1, $2, $3, $4, $5, $6, $7 ":" $8 "-" $9 "|" $16 } else { print $1, $2, $3, $4, $5, $6, "None" }}' | groupBy -g 1-6 -c 7 -o distinct | sort -k1,1 -k2,2n --parallel=8 -S 10% >> lentiMPRA_cCRE_k562_TE.bed
 
 # Run the script to generate figure 5a
 Rscript mpraCCRE.r --vanilla
@@ -201,6 +179,16 @@ Rscript mpraCCRE.r --vanilla
 ### Figure 5c
 # This figure uses the lentivirus MPRA data, TE annotations, K562 TF ChIP-seq, and PhastCons to measure how human lineage intervals (both TE
 # and nonTE) overlap with genomic indicators of cis-regulatory activity
+
+# Add deepTools to path (required on our server)
+# export LC_ALL=en_US.utf-8; export LANG=en_US.utf-8
+# mkdir -p /workdir/$USER/tmp; export TMPDIR=/workdir/$USER/tmp
+# export PATH=/programs/deeptools-3.5.1/bin:$PATH; export PYTHONPATH=/programs/deeptools-3.5.1/lib64/python3.9/site-packages:/programs/deeptools-3.5.1/lib/python3.9/site-packages
+
+# Generate an intersection of TEs with the binned phastCons scores using deepTools multiBamSummary with TEs and phastCons scores as input! 
+multiBigwigSummary bins -bs 20 -v -b hg38.phastCons30way.bw -o trash -p 20 --labels phastCons30 --outRawCounts tmp
+sed '1d' tmp | sort -k1,1 -k2,2n --parallel=8 -S 10% > bins_phastCons30.txt; rm tmp
+awk '{OFS="\t"; if ($4 == "nan") $4 = 0; print}' bins_phastCons30.txt > bins_noNa_phastCons30.txt
 
 ### NOTE: The below file "human_cCREs_with_mouse_compare.txt" is the output of the cCRE orthology/turnover analysis, and should be either 
 ### downloadable or generatable with code for figure 4
@@ -222,9 +210,6 @@ while read cmd; do $cmd; done < chip_cmds
 # Read through all the files in chip_tmp and combine them together
 cat chip_tmp/* | sort -k1,1 -k2,2n --parallel=8 -S 10% | groupBy -g 1-5 -c 6 -o collapse | awk '{OFS="\t"; print $0, gsub(/,/,"", $6) + 1}' | awk '{OFS="\t"; print $1, $2, $3, $4, $5, $7, $6}' > combined_ccre_chip
 rm -r chip_tmp
-
-# PhastCons 
-bedtools intersect -sorted -wao -a init -b bins_noNa_phastCons17.txt | sort -k1,1 -k2,2n -S 10% --parallel=8 | groupBy -g 1-5 -c 9 -o mean > ccre_both_bins_phastCons17.txt
 
 # MPRA
 sed '1d' lentiMPRA_k562.bed | bedtools intersect -sorted -wa -wb -a ccre_te -b stdin | cut -f1-4,11-13 | groupBy -g 1-4 -c 5,6,7 -o max,max,max | awk '{if ($5 >= 1) print $4}' > ccre_te_mpra
@@ -322,8 +307,8 @@ do
 done < fullFactor
 rm tmp tmp2
 
-# Run orthMerge_manual.r code on the files for each of the different samples above
-Rscript --vanilla orthMerge_manual.r
+# Run orthMergeManual.r code on the files for each of the different samples above
+Rscript --vanilla orthMergeManual.r
 
 # Finally, use bedtools groupby to combine all the within 5kb files into a file with each row featuring a unique ID so you can filter out 
 # all the instances that seem like examples of putative turnover occuring in both human and mouse
@@ -331,19 +316,19 @@ while read f; do head -n 1 2_humanTFs/"${f}"_5kb_merge > tmp; sed '1d' 2_humanTF
 while read f; do head -n 1 1_mouseTFs/"${f}"_5kb_merge > tmp; sed '1d' 1_mouseTFs/"${f}"_5kb_merge | sort -k8,8 | groupBy -g 1-8 -c 9 -o distinct | sort -k1,1 -k2,2n >> tmp; cat tmp > 1_mouseTFs/"${f}"_full_5kb_merge; done < fullFactor
 rm tmp
 
-# Create input files to infer which putative turnover events are ancestral
+# Create input files to more easily identify which putative turnover events are ancestral
 awk '{OFS="\t"; if ($1 ~ "Both") print}' `date +'%m%d%y'`_syntenicPeaks_human.txt | pigz -p 8 > `date +'%m%d%y'`_syntenicPeaks_bothBound_human.txt.gz
 awk '{OFS="\t"; if ($1 ~ "Both") print}' `date +'%m%d%y'`_syntenicPeaks_mouse.txt | pigz -p 8 > `date +'%m%d%y'`_syntenicPeaks_bothBound_mouse.txt.gz
 
-# Create more input files for ancestral TF binding site inference
-printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t\n' "chr" "start" "end" "TE_ID" "peak_ID" "nearest_peak_ID" "dist_to_PLS" "factor" > `date +'%m%d%y'`_topHuman_putativeTurnover.txt
-printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t\n' "chr" "start" "end" "TE_ID" "peak_ID" "nearest_peak_ID" "dist_to_PLS" "factor" > `date +'%m%d%y'`_topMouse_putativeTurnover.txt
+# Create more input files as for above, specifically finding which intervals are the most likely candidates for turnover across each factor 
+printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t\n' "chr" "start" "end" "TE_ID" "peak_ID" "nearest_peak_ID" "dist_to_PLS" "factor" > 031723_topHuman_putativeTurnover.txt
+printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t\n' "chr" "start" "end" "TE_ID" "peak_ID" "nearest_peak_ID" "dist_to_PLS" "factor" > 031723_topMouse_putativeTurnover.txt
 while read f
 do
 	sed '1d' 2_humanTFs/"${f}"_full_5kb_merge | awk '{OFS="\t"; $10 = gsub(",", ",", $9); $11 = gsub("\\|M\\|", "|M|", $9); if ($11 == $10 + 1 && $8 ~ "\\|H\\|" && $5 != 1) print $1, $2, $3, $7, $8, $9}' > tmp
-	paste tmp <(awk '{OFS="\t"; if ($4 == ".") { print $1, $2, $3 } else { print $4 } }' tmp | sed 's/:/\t/g;s/-/\t/g;s/|.*//g' | awk '{OFS="\t"; print $0, ".", "-1", "-1", ".", "-1", ".", "0"}' | bedtools closest -d -t first -a stdin -b k562_pls.bed | awk -v a=$f '{OFS="\t"; if ($4 != ".") { print $4 ":" $5 "-" $6 "|" $7, $14, a } else { print $14, a } }') >> `date +'%m%d%y'`_topHuman_putativeTurnover.txt
+	paste tmp <(awk '{OFS="\t"; if ($4 == ".") { print $1, $2, $3 } else { print $4 } }' tmp | sed 's/:/\t/g;s/-/\t/g;s/|.*//g' | awk '{OFS="\t"; print $0, ".", "-1", "-1", ".", "-1", ".", "0"}' | bedtools closest -d -t first -a stdin -b k562_pls.bed | awk -v a=$f '{OFS="\t"; if ($4 != ".") { print $4 ":" $5 "-" $6 "|" $7, $14, a } else { print $14, a } }') >> 031723_topHuman_putativeTurnover.txt
 	sed '1d' 1_mouseTFs/"${f}"_full_5kb_merge | awk '{OFS="\t"; $10 = gsub(",", ",", $9); $11 = gsub("\\|H\\|", "|H|", $9); if ($11 == $10 + 1 && $8 ~ "\\|M\\|" && $5 != 1) print $1, $2, $3, $7, $8, $9}' > tmp
-	paste tmp <(awk '{OFS="\t"; if ($4 == ".") { print $1, $2, $3 } else { print $4 } }' tmp | sed 's/:/\t/g;s/-/\t/g;s/|.*//g' | awk '{OFS="\t"; print $0, ".", "-1", "-1", ".", "-1", ".", "0"}' | bedtools closest -d -t first -a stdin -b k562_pls.bed | awk -v a=$f '{OFS="\t"; if ($4 != ".") { print $4 ":" $5 "-" $6 "|" $7, $14, a } else { print $14, a } }') >> `date +'%m%d%y'`_topMouse_putativeTurnover.txt
+	paste tmp <(awk '{OFS="\t"; if ($4 == ".") { print $1, $2, $3 } else { print $4 } }' tmp | sed 's/:/\t/g;s/-/\t/g;s/|.*//g' | awk '{OFS="\t"; print $0, ".", "-1", "-1", ".", "-1", ".", "0"}' | bedtools closest -d -t first -a stdin -b k562_pls.bed | awk -v a=$f '{OFS="\t"; if ($4 != ".") { print $4 ":" $5 "-" $6 "|" $7, $14, a } else { print $14, a } }') >> 031723_topMouse_putativeTurnover.txt
 done < fullFactor
 
 #Use orthologous TF binding sites to determine a phastCons threshold for inferring which TF binding site (if any) is ancestral
@@ -391,6 +376,7 @@ python3 assign_phastCons_topPeaks.py 031723_topMouse_putativeTurnover.txt overla
 #Call putative turnover events using phastCons filter
 python3 call_likely_turnover_v2.py topHuman_putativeTurnover_phastCons summary_syntenicPeaks_human_phastCons primate_human_lineage_TEs rodent_mouse_lineage_TEs v2_topHuman_putativeTurnover_phastCons_filter
 python3 call_likely_turnover_v2.py topMouse_putativeTurnover_phastCons summary_syntenicPeaks_mouse_phastCons rodent_mouse_lineage_TEs primate_human_lineage_TEs v2_topMouse_putativeTurnover_phastCons_filter
+
 
 # Run the R scripts to generate figures 4c...
 Rscript --vanilla liftOverBars.r
