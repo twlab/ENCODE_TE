@@ -18,7 +18,7 @@ mpra_te <- read.table("ccre_te_mpra")$V1
 mpra_nonte <- read.table("ccre_nonte_mpra")$V1
 
 # Read in the phastCons intersection IDs
-bins <- fread("ccre_both_bins_phastCons17.txt")
+bins <- fread("bins_noNa_phastCons30.txt")
 phast_te <- subset(bins, V6 >= quantile(bins$V6, .9) & V5 == "TE")$V4
 phast_nonte <- subset(bins, V6 >= quantile(bins$V6, .9) & V5 == "nonTE")$V4
 
